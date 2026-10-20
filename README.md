@@ -23,6 +23,23 @@ Then the ritual begins. Rerun the workflow. Wait. Rerun it again. Five hundred b
 
 ChaosSloth treats flakiness as a schedule to reconstruct, not a temperament to tolerate. It samples natural execution; establishes causal order; infers the timing boundary; forces the collision; subjects the repair to adversarial cycles. It does not ask the failure to become convenient. It makes the failure repeat until it can be named.
 
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Task A
+    participant B as Task B
+    participant X as Shared state x
+    A->>X: read x = 0
+    A-->>A: await — execution yields
+    B->>X: read x = 0
+    B->>X: write x = 1
+    A->>X: write x = 1 from stale value
+    Note over A,X: Two increments; one update disappears
+```
+
+The failure is not that either task ran incorrectly. Each followed its local script. The defect is in the missing relation between them: the system allowed both read-modify-write histories to overlap without an atomic boundary.
+
 ## 2. The Sloth’s Manifesto
 
 At 2 a.m., the engineer is lit by the CI dashboard, launching build 500 and watching a progress bar as though it had received a prophecy. The sloth refuses the panic. It sits with the event history. Bayesian priors narrow the search; vector clocks establish which events could have caused which others. Silence is not inactivity. It is computation without theatre.
@@ -35,49 +52,37 @@ Urgency is not rigor. Repetition is not knowledge. An experiment earns its cost 
 
 Four pillars carry the argument from observation to repair. Telemetry supplies the facts. Causal analysis gives them order. Temporal inversion identifies where to look. Liveness analysis guards the lock structure. AST synthesis makes the smallest useful change. Then deterministic replay and sandboxed bytecode verification put that change on trial. Mathematics is not ornament laid over a log; it is the means by which an execution history becomes legible, and a repair becomes falsifiable.
 
-```text
- Natural asyncio execution
-          │
-          ▼
-┌──────────────────────────────┐
-│ Observe 25 natural cycles    │  yields · loop latency · context switches
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│ I. Safety                    │  Lamport happens-before vector clocks
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│ II. State-space inversion    │  Local TabPFN-3.5 telemetry analysis
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│ III. Liveness                │  Coffman lock-acquisition DAG audit
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│ IV. Repair                   │  Gemma diagnosis + focused AST patch
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│ Deterministic replay &       │  in-memory bytecode · 25 adversarial cycles
-│ sandbox verification        │
-└──────────────────────────────┘
+```mermaid
+flowchart TD
+    A["Asyncio execution"] --> B["Observe 25 natural cycles<br/>yield deltas · loop latency · context switches"]
+    B --> C{"Build the execution record"}
+    C --> D["I · Safety<br/>Lamport vector clocks"]
+    C --> E["II · Temporal inversion<br/>TabPFN-3.5 telemetry model"]
+    C --> F["III · Liveness<br/>Coffman lock-acquisition DAG"]
+    D --> G["Force the candidate interleaving"]
+    E --> G
+    F --> G
+    G --> H["Local diagnosis<br/>Gemma via Ollama"]
+    H --> I["IV · Repair<br/>AST critical-section synthesis"]
+    I --> J["Compile to in-memory bytecode"]
+    J --> K{"25 adversarial cycles"}
+    K -->|"Invariant holds"| L["Verified repair candidate"]
+    K -->|"Invariant breaks"| G
 ```
 
 ### The observation window
 
-ChaosSloth captures coroutine yield timings, event-loop latency deltas, and context switches over **25 natural cycles**. This is the baseline: the runtime’s own footprints, taken before the system is asked to reenact the crime.
+ChaosSloth captures coroutine yield timings, event-loop latency deltas, and context switches over **25 natural cycles**. The loop leaves its own footprints: pauses, handoffs, and the small delays in which one task can enter another task’s unfinished sentence. That record is the baseline from which the candidate schedule is inferred.
 
 ### Pillar I — Safety: Lamport’s happens-before relation
 
-For conflicting events $e_1$ and $e_2$ on the same memory location, a race exists when neither event causally precedes the other and at least one is a write:
+For conflicting events $e_1$ and $e_2$ on the same memory location, a race exists when neither event causally precedes the other and at least one is a write. Let $W(e)$ mean “event $e$ writes this location”:
 
 $$
-\operatorname{Race}(e_1,e_2) \iff
 \neg(e_1 \prec e_2)
 \land \neg(e_2 \prec e_1)
-\land \bigl(\operatorname{is\_write}(e_1) \lor \operatorname{is\_write}(e_2)\bigr)
+\land \bigl(W(e_1) \lor W(e_2)\bigr)
+\implies \text{data race}
 $$
 
 Lamport vector clocks encode the partial order of events across tasks. There is no universal “now” shared by concurrent operations—only events and the causal relation $e_1 \prec e_2$. A wall clock may place two events on a timeline; it cannot manufacture a causal edge between them. When conflicting events are incomparable, the order witnessed in one run makes no promise about the next. ChaosSloth uses that distinction to separate harmless concurrency from a race capable of breaking an invariant.
@@ -86,11 +91,17 @@ Lamport vector clocks encode the partial order of events across tasks. There is 
 
 Prior Labs TabPFN-3.5 runs locally as an active analysis agent over tabular scheduling telemetry. It evaluates the observed state in context and isolates the critical non-linear delay coordinate where an invariant collapses: **240.1 µs**, at **69.64% posterior confidence**.
 
-The inferred coordinate becomes a concrete schedule for deterministic interleaving. A fleeting accident acquires a timestamp and a replay path. Chance is no longer asked to testify; the schedule is called back to the stand.
+The inference is Bayesian in the literal sense: evidence revises the relative plausibility of candidate timing regions. For hypothesis $H$ and observed telemetry $D$, the governing relation is
+
+$$
+P(H\mid D)=rac{P(D\mid H)P(H)}{P(D)}.
+$$
+
+Here, $H$ is a candidate temporal boundary and $D$ is the measured scheduling record. The model turns a high-dimensional timing landscape into a coordinate that can be tested. That coordinate becomes a concrete schedule for deterministic interleaving. A fleeting accident acquires a timestamp and a replay path; chance is no longer asked to testify—the schedule is called back to the stand.
 
 ### Pillar III — Liveness: the Coffman lock DAG
 
-ChaosSloth dynamically audits `asyncio.Lock` acquisition dependencies as a directed graph. A cycle in the wait-for relation is the signature of circular wait. For the observed lock graph $G=(V,E)$, liveness requires acyclicity:
+ChaosSloth dynamically audits `asyncio.Lock` acquisition dependencies as a directed graph. Vertices represent the participants in the wait; edges record who is waiting on whom. A directed cycle closes the trap: every participant holds a resource needed by the next, and no one can move first. For the observed lock graph $G=(V,E)$, liveness requires acyclicity:
 
 $$
 G \text{ is a DAG} \iff
@@ -99,11 +110,11 @@ G \text{ is a DAG} \iff
 \text{ and } v_k=v_0.
 $$
 
-The Coffman condition gives liveness a graph-theoretic test: a strictly acyclic lock-acquisition graph contains no circular wait in the observed dependency relation. ChaosSloth also searches for synchronous blocking primitives that can pin the event loop in place. Safety without progress is still a system that has stopped.
+The Coffman condition gives liveness a graph-theoretic test: a strictly acyclic lock-acquisition graph contains no circular wait in the observed dependency relation. ChaosSloth also searches for synchronous blocking primitives that can pin the event loop in place. A program can preserve every value and still fail by never reaching its next instruction. Safety without progress is a system that has stopped.
 
 ### Pillar IV — Amdahl-optimal critical-section slicing
 
-A local Google Gemma model diagnoses the critical section; Python’s `ast.NodeTransformer` then synthesizes an atomic lock around the complete read-modify-write cycle. For a shared session store, the generated patch protects the `get`, `append`, and `set` sequence:
+A local Google Gemma model diagnoses the critical section; Python’s `ast.NodeTransformer` then synthesizes an atomic lock around the complete read-modify-write cycle. The boundary matters. Protect only the write and the stale read has already escaped; protect the entire coroutine and unrelated work queues behind a needless gate. For a shared session store, the generated patch protects the `get`, `append`, and `set` sequence:
 
 ```python
 async with self._lock:
@@ -111,6 +122,23 @@ async with self._lock:
     current.append(token)
     self.sessions[user_id] = current
 ```
+
+
+```mermaid
+flowchart LR
+    A["Natural delay / await"] --> B["Acquire asyncio.Lock"]
+    B --> C["Read shared state"]
+    C --> D["Modify state"]
+    D --> E["Write shared state"]
+    E --> F["Release lock"]
+    F --> G["Other work proceeds"]
+    style B fill:#d9f2e6,stroke:#247a52,stroke-width:2px
+    style C fill:#fff2cc,stroke:#a67c00
+    style D fill:#fff2cc,stroke:#a67c00
+    style E fill:#fff2cc,stroke:#a67c00
+```
+
+The shaded middle is the invariant’s boundary. The delay stays outside; the state transition stays indivisible. A lock is a gate, and every instruction placed behind it pays a serialization cost.
 
 Non-blocking delays and yields remain outside the lock. Locking the entire coroutine would needlessly serialize unrelated work. Amdahl’s Law makes the cost plain: if $P$ is the parallelizable fraction of a workload and $N$ is the number of workers, the speedup is bounded by
 
@@ -126,7 +154,7 @@ The modified AST is compiled into in-memory bytecode and run through 25 adversar
 
 ## 4. Why Cloud AI Fails Here
 
-A cloud LLM may be brilliant; it is still at the wrong end of a wire. ChaosSloth is locating a **240.1 µs** scheduling coordinate. The network round trip belongs to another temporal scale; the request path adds its own variance to the investigation. A distant service cannot be the silent witness to a microsecond crime.
+A cloud LLM may be brilliant; it is still at the wrong end of a wire. ChaosSloth is locating a **240.1 µs** scheduling coordinate. The network round trip belongs to another temporal scale; the request path adds its own variance to the investigation. A distant service cannot be the silent witness to a microsecond crime. The timing boundary is in the process, the model call is elsewhere, and the experiment has already changed before the answer returns.
 
 Then there is memory: the program’s memory, and the memory bus carrying its state. Source code and execution traces can hold credentials, customer records, and the map of a proprietary system. ChaosSloth keeps inference local and air-gapped; program context stays beside the process that produced it. No upload. No external inference dependency. No per-query meter running with every replay. Once installed, local inference has zero marginal cost.
 
@@ -201,7 +229,7 @@ Google Gemma 2B/9B runs through Ollama. On the **Apple M4**, Gemma 2B uses Metal
 Clone the repository and install ChaosSloth in editable mode:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/smtherer/ChaosSloth.git
 cd ChaosSloth
 python -m venv .venv
 source .venv/bin/activate
@@ -230,14 +258,16 @@ For local AST diagnosis, install Ollama and make the supported Gemma model avail
 
 ## 7. Hacktoberfest 2026 Partner Prize Submissions
 
-| Prize Category | Value | Why I Am Submitting For This Track / How My Project Qualifies |
+ChaosSloth is built for the **Slow and Steady** challenge and enters the partner tracks with one claim: concurrency deserves evidence at the scale where it breaks. Each integration has a distinct job in that argument.
+
+| Prize Category | Value | Case for the Track |
 |---|---:|---|
-| 🏆 Slow & Steady (Top Prize) | $250 | I am participating in this category because ChaosSloth replaces frantic CI reruns and manual fuzzing with Bayesian schedule analysis, deterministic replay, and sandbox verification—so developers can step away while the engine does the patient work. |
-| 🌟 Prior Labs (Best Use of TabPFN) | $200 | I am participating in this category because ChaosSloth puts TabPFN-3.5 to work as an active runtime agent on microsecond scheduling telemetry, locating multidimensional temporal cliffs at a measured 240.1 µs coordinate. |
-| 🌟 Google Gemma (Best Use of Gemma) | $200 | I am participating in this category because ChaosSloth runs Gemma 2B locally through Ollama on Apple Silicon Metal at 52.91 tokens/sec, diagnosing AST critical sections while keeping source context air-gapped. |
-| 🌟 Render (Best Use of Render) | $200 | I am participating in this category because ChaosSloth’s live telemetry explorer and agent dashboard run on Render, deployed from the infrastructure-as-code definition in `render.yaml`. |
-| 🛡️ Sentry (Best Agent Tracing) | $100 | I am participating in this category because Sentry Agent Tracing follows the work across TabPFN inversion spans, Gemma reasoning latency, and sandbox verification cycles—the places where an autonomous diagnosis must account for its own time. |
-| 🌐 .tech Domains | $100 | I am participating in this category because the production dashboard is live at [chaossloth.tech](https://chaossloth.tech), giving the telemetry engine a public home beyond the terminal. |
+| 🏆 Slow & Steady — Top Prize | $250 | I enter this track because ChaosSloth replaces frantic reruns and manual fuzzing with patient Bayesian analysis, deterministic replay, and sandbox verification. The engineer can leave the dashboard; the evidence keeps working. |
+| 🌟 Prior Labs — Best Use of TabPFN | $200 | My Prior Labs entry puts TabPFN-3.5 inside the runtime investigation: it reads system-level scheduling telemetry and identifies the 240.1 µs temporal boundary associated with invariant failure. |
+| 🌟 Google Gemma — Best Use of Gemma | $200 | For Gemma, I run the 2B model locally through Ollama on Apple M4 Metal at 52.91 tokens/sec. It diagnoses AST critical sections while source and trace context remain air-gapped. |
+| 🌟 Render — Best Use of Render | $200 | Render carries the live telemetry explorer and agent dashboard; `render.yaml` makes the deployment part of the project rather than a hand-maintained afterthought. |
+| 🛡️ Sentry — Best Agent Tracing | $100 | I bring Sentry into the agent’s chain of reasoning: traces cover TabPFN inversion spans, Gemma reasoning latency, and sandbox verification cycles, exposing the cost of each step in the diagnosis. |
+| 🌐 .tech Domains | $100 | The .tech entry has a public endpoint: the production dashboard is live at [chaossloth.tech](https://chaossloth.tech), where the project’s telemetry story leaves the terminal and meets its users. |
 
 ## 8. Deployment & License
 
