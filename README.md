@@ -25,12 +25,18 @@ ChaosSloth treats flakiness as a schedule to reconstruct, not a temperament to t
 
 
 ```mermaid
-flowchart LR
-    A["Task A reads x = 0"] --> B["Task A awaits; execution yields"]
+flowchart TD
+    A["Task A reads x = 0"] --> B["Task A awaits and yields"]
     B --> C["Task B reads x = 0"]
     C --> D["Task B writes x = 1"]
-    D --> E["Task A resumes; stale write x = 1"]
-    E --> F["Two increments attempted; final x = 1"]
+    D --> E["Task A resumes and writes stale x = 1"]
+    E --> F["Expected x = 2, actual x = 1"]
+    style A fill:#e8f0fe,stroke:#315ea8
+    style B fill:#fff2cc,stroke:#a67c00
+    style C fill:#e8f0fe,stroke:#315ea8
+    style D fill:#fce8e6,stroke:#b3261e
+    style E fill:#fce8e6,stroke:#b3261e
+    style F fill:#fce8e6,stroke:#b3261e,stroke-width:2px
 ```
 
 The failure is not that either task ran incorrectly. Each followed its local script. The defect is in the missing relation between them: the system allowed both read-modify-write histories to overlap without an atomic boundary.
@@ -89,7 +95,7 @@ Prior Labs TabPFN-3.5 runs locally as an active analysis agent over tabular sche
 The inference is Bayesian in the literal sense: evidence revises the relative plausibility of candidate timing regions. For hypothesis $H$ and observed telemetry $D$, the governing relation is
 
 $$
-P(H\mid D)=rac{P(D\mid H)P(H)}{P(D)}.
+P(H\mid D)=\frac{P(D\mid H)P(H)}{P(D)}.
 $$
 
 Here, $H$ is a candidate temporal boundary and $D$ is the measured scheduling record. The model turns a high-dimensional timing landscape into a coordinate that can be tested. That coordinate becomes a concrete schedule for deterministic interleaving. A fleeting accident acquires a timestamp and a replay path; chance is no longer asked to testify—the schedule is called back to the stand.
