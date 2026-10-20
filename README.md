@@ -201,7 +201,7 @@ Google Gemma 2B/9B runs through Ollama. On the **Apple M4**, Gemma 2B uses Metal
 Clone the repository and install ChaosSloth in editable mode:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/smtherer/ChaosSloth.git
 cd ChaosSloth
 python -m venv .venv
 source .venv/bin/activate
