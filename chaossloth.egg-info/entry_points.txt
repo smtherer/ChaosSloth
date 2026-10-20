@@ -1,0 +1,5 @@
+[console_scripts]
+chaossloth = chaossloth.cli:main
+
+[pytest11]
+chaossloth = chaossloth.pytest_plugin.plugin
