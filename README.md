@@ -93,10 +93,10 @@ The inferred coordinate becomes a concrete schedule for deterministic interleavi
 ChaosSloth dynamically audits `asyncio.Lock` acquisition dependencies as a directed graph. A cycle in the wait-for relation is the signature of circular wait. For the observed lock graph $G=(V,E)$, liveness requires acyclicity:
 
 $$
-\operatorname{Acyclic}(G) \iff
-\nexists v_0,\ldots,v_k:\;
-(v_i,v_{i+1})\in E\ \text{for }0\le i<k
-\land v_k=v_0
+G \text{ is a DAG} \iff
+\text{there is no sequence } v_0,\ldots,v_k \text{ with } k \ge 1,
+(v_i,v_{i+1}) \in E \text{ for every } 0 \le i < k,
+\text{ and } v_k=v_0.
 $$
 
 The Coffman condition gives liveness a graph-theoretic test: a strictly acyclic lock-acquisition graph contains no circular wait in the observed dependency relation. ChaosSloth also searches for synchronous blocking primitives that can pin the event loop in place. Safety without progress is still a system that has stopped.
@@ -201,7 +201,7 @@ Google Gemma 2B/9B runs through Ollama. On the **Apple M4**, Gemma 2B uses Metal
 Clone the repository and install ChaosSloth in editable mode:
 
 ```bash
-git clone https://github.com/smtherer/ChaosSloth.git
+git clone <repository-url>
 cd ChaosSloth
 python -m venv .venv
 source .venv/bin/activate
