@@ -25,17 +25,12 @@ ChaosSloth treats flakiness as a schedule to reconstruct, not a temperament to t
 
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant A as Task A
-    participant B as Task B
-    participant X as Shared state x
-    A->>X: read x = 0
-    A-->>A: await — execution yields
-    B->>X: read x = 0
-    B->>X: write x = 1
-    A->>X: write x = 1 from stale value
-    Note over A,X: Two increments; one update disappears
+flowchart LR
+    A["Task A reads x = 0"] --> B["Task A awaits; execution yields"]
+    B --> C["Task B reads x = 0"]
+    C --> D["Task B writes x = 1"]
+    D --> E["Task A resumes; stale write x = 1"]
+    E --> F["Two increments attempted; final x = 1"]
 ```
 
 The failure is not that either task ran incorrectly. Each followed its local script. The defect is in the missing relation between them: the system allowed both read-modify-write histories to overlap without an atomic boundary.
