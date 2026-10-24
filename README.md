@@ -98,11 +98,11 @@ The reducer uses this relation to avoid permuting events whose causal order is f
 
 Event-loop scheduling observations are treated as tabular data. Given observations `D`, a candidate timing coordinate `Δt*`, and model parameters `θ`, the posterior predictive probability is:
 
-$$
-p(y^*=1 \mid \Delta t^*, D) = \int p(y^*=1 \mid \Delta t^*, \theta)\,p(\theta \mid D)\,d\theta
-$$
+```math
+p(y^{\star}=1 \mid \Delta t^{\star}, D) = \int p(y^{\star}=1 \mid \Delta t^{\star}, \theta)\,p(\theta \mid D)\,d\theta
+```
 
-For the reported benchmark, the inferred critical coordinate was **218.5 µs**, with **88.35% posterior confidence**. The estimate steers deterministic schedule replay; the replay supplies the concrete event ordering. The reported pre-patch failure was reproduced **10/10 times on demand**.
+For the reported benchmark, the inferred critical coordinate was **218.5 µs**, with **88.35% posterior confidence**. The estimate steers deterministic schedule replay; the replay supplies the concrete event ordering. A gap barely longer than two tenths of a millisecond was enough to separate the ordinary-looking execution from the lost update. The reported pre-patch failure was reproduced **10/10 times on demand**.
 
 ## Local semantic diagnosis
 
