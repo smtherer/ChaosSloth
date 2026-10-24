@@ -1,277 +1,223 @@
-# ChaosSloth 🦥
+# To Yield, or Not to Yield: Why I Built a Concurrency Prover After School
 
-> A concurrent system has no single present tense. It has events, and the order they can prove.
->
-> **The Autonomous Bayesian Concurrency Interleaver & Deterministic Race-Condition Exorcist**
+I built **ChaosSloth** to answer a question that flaky async tests usually leave hanging: what exact ordering made this fail, and can I make it happen again on purpose?
 
-[![Hacktoberfest 2026](https://img.shields.io/badge/Hacktoberfest-2026-orange)](#hacktoberfest-2026-partner-prize-submissions)
-[![Python](https://img.shields.io/badge/Python-asyncio-blue)](#installation--quickstart)
-[![Local AI](https://img.shields.io/badge/AI-local%20inference-green)](#why-cloud-ai-fails-here)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](#license)
+ChaosSloth is a deterministic asynchronous concurrency verification engine for Python. It analyzes event-loop schedules, identifies conflicting accesses across `await` points, and synthesizes narrowly scoped synchronization so a failure can be replayed and fixed without turning the whole program into one giant lock. I work on it after school; the goal is straightforward: give a race a schedule, a location, and a patch someone can review.
 
-ChaosSloth is an autonomous concurrency investigation engine for Python `asyncio`. It finds the schedule that breaks an invariant, reconstructs that schedule on demand, and synthesizes a focused synchronization repair. Causal analysis, Bayesian temporal inversion, lock-graph auditing, local model reasoning, and sandbox verification turn an intermittent failure into an executable case file: evidence gathered; hypothesis stated; schedule replayed; repair put on trial.
+> A green rerun is not an explanation. It is one schedule that did not lose the race.
 
-For Hacktoberfest 2026 / DEV Challenge, the theme is **“Slow and Steady”**—International Sloth Day made into a systems thesis. Frantic motion is the amateur’s substitute for understanding. Mastery is mathematical stillness: let the machine count, compare, and replay until chance has nowhere left to hide.
+The project’s reported live benchmark completed in **6.98 seconds**: a workload that failed **76.0%** of the time under natural event-loop jitter had **0 failures across 25 adversarial cycles** after patching. See [The 6.98-second proof](#the-698-second-proof).
 
-## 1. The Heisenbug Tax
+## The green-rerun delusion
 
-A race condition is not bad luck. It is a tax levied in microseconds and collected in hours. One failure; then green. One red build among a hundred. The invoice arrives as eroded confidence, a release held hostage, and a team learning to distrust the machine it built.
+Python `asyncio` is cooperative: a coroutine runs until it yields, often at `await`. That does not make shared state magically safe. Two coroutines can both read a value, yield, then both write a result computed from the old value. No OS threads are required. The ingredients are shared mutable state and a yield between the read and write.
 
-The Heisenbug is software’s quantum parable: an execution state that refuses to survive observation. A print statement inserts work. A debugger changes pauses. Instrumentation perturbs the hot path. The event loop takes another step; the failure leaves no body behind. The observer effect arrives with a stack trace. To look is to alter the schedule that made the defect visible.
+The familiar workaround is `await asyncio.sleep(0.1)`. It can change which schedule happens, which is not the same as making the shared-state update safe. Then CI fails again, the standup becomes a weather report about “flakiness,” and somebody clicks **Re-run failed jobs** until the badge turns green. A green badge says that run passed. It says nothing about the ordering that failed five minutes ago.
 
-Then the ritual begins. Rerun the workflow. Wait. Rerun it again. Five hundred builds later: heat without light, activity without knowledge. `@pytest.mark.flaky(reruns=5)` is architectural bribery—pay the test to stop complaining, sweep live ammunition beneath the cluster rug. A green check purchased with retries is not confidence. It is silence, itemized at CI rates.
+ChaosSloth treats schedules as evidence. It records the accesses, reduces equivalent schedules, locates a conflicting interval, and checks a deterministic replay after applying a patch.
 
-ChaosSloth treats flakiness as a schedule to reconstruct, not a temperament to tolerate. It samples natural execution; establishes causal order; infers the timing boundary; forces the collision; subjects the repair to adversarial cycles. It does not ask the failure to become convenient. It makes the failure repeat until it can be named.
+## The 6.98-second proof
 
+The following is the reported eight-stage live run, condensed to a terminal trace:
+
+```text
+$ chaossloth examples/counter.py
+[1/8] Capture event-loop telemetry ................. 0.41s
+[2/8] Build event alphabet and resource sets ....... 0.62s
+[3/8] Collapse independent schedule permutations ... 0.38s
+[4/8] Infer collision coordinate .................. 1.08s
+[5/8] Diagnose semantic hazard locally ............ 1.76s
+[6/8] Synthesize ordered AST lock enclosure ........ 0.94s
+[7/8] Replay adversarial schedules ................. 1.31s
+[8/8] Verify 25 cycles: 0 failures ................. 0.48s
+----------------------------------------------------------
+Completed in 6.98s | before: 76.0% failing | after: 0.0%
+Replay: 10/10 reproductions on demand
+Collision coordinate: 218.5 µs | posterior confidence: 88.35%
+```
+
+These are the project’s reported benchmark figures. Reproduce them against the benchmark workload and environment used for the run; timing and failure rates are workload-dependent.
+
+## Architecture and pipeline
 
 ```mermaid
 flowchart TD
-    A["Task A reads x = 0"] --> B["Task A awaits and yields"]
-    B --> C["Task B reads x = 0"]
-    C --> D["Task B writes x = 1"]
-    D --> E["Task A resumes and writes stale x = 1"]
-    E --> F["Expected x = 2, actual x = 1"]
-    style A fill:#e8f0fe,stroke:#315ea8
-    style B fill:#fff2cc,stroke:#a67c00
-    style C fill:#e8f0fe,stroke:#315ea8
-    style D fill:#fce8e6,stroke:#b3261e
-    style E fill:#fce8e6,stroke:#b3261e
-    style F fill:#fce8e6,stroke:#b3261e,stroke-width:2px
+    A([Async Python workload]) --> B[Capture reads, writes, awaits, and causal clocks]
+    B --> C[Build event alphabet and resource sets]
+    C --> D[Collapse equivalent schedules]
+    D --> E[TabPFN estimates the collision window]
+    E --> F[Local Gemma classifies the bounded hazard]
+    F --> G[AST transformer inserts ordered locks]
+    G --> H{Adversarial replay}
+    H -->|All challenged schedules pass| I([Patch plus replay evidence])
+    H -->|Counterexample found| D
+    classDef observe fill:#102a43,color:#f0f4f8,stroke:#48cae4,stroke-width:2px
+    classDef infer fill:#2d1b45,color:#f5e9ff,stroke:#c084fc,stroke-width:2px
+    classDef patch fill:#3b1d20,color:#fff1f2,stroke:#fb7185,stroke-width:2px
+    classDef verify fill:#123524,color:#ecfdf5,stroke:#4ade80,stroke-width:2px
+    class A,B,C,D observe
+    class E,F infer
+    class G patch
+    class H,I verify
 ```
-
-The failure is not that either task ran incorrectly. Each followed its local script. The defect is in the missing relation between them: the system allowed both read-modify-write histories to overlap without an atomic boundary.
-
-## 2. The Sloth’s Manifesto
-
-At 2 a.m., the engineer is lit by the CI dashboard, launching build 500 and watching a progress bar as though it had received a prophecy. The sloth refuses the panic. It sits with the event history. Bayesian priors narrow the search; vector clocks establish which events could have caused which others. Silence is not inactivity. It is computation without theatre.
-
-Urgency is not rigor. Repetition is not knowledge. An experiment earns its cost only by reducing uncertainty. The Sloth automates the tedious search, preserves the evidence, and returns human attention to judgments machines cannot own: whether the invariant expresses the contract, whether the repair preserves it, whether the change deserves to ship.
-
-“Slow and steady” means deliberate computation at machine speed. ChaosSloth observes, reasons, replays, and verifies while the developer closes the laptop. The purpose is not less thought, but thought no longer squandered on ritual. Engineered laziness refuses to repeat by hand what a system can establish consistently; it also demands that automation return evidence, not merely a green light.
-
-## 3. The Four Pillars of Concurrency
-
-Four pillars carry the argument from observation to repair. Telemetry supplies the facts. Causal analysis gives them order. Temporal inversion identifies where to look. Liveness analysis guards the lock structure. AST synthesis makes the smallest useful change. Then deterministic replay and sandboxed bytecode verification put that change on trial. Mathematics is not ornament laid over a log; it is the means by which an execution history becomes legible, and a repair becomes falsifiable.
 
 ```mermaid
-flowchart TD
-    A["Asyncio execution"] --> B["Observe 25 natural cycles<br/>yield deltas · loop latency · context switches"]
-    B --> C{"Build the execution record"}
-    C --> D["I · Safety<br/>Lamport vector clocks"]
-    C --> E["II · Temporal inversion<br/>TabPFN-3.5 telemetry model"]
-    C --> F["III · Liveness<br/>Coffman lock-acquisition DAG"]
-    D --> G["Force the candidate interleaving"]
-    E --> G
-    F --> G
-    G --> H["Local diagnosis<br/>Gemma via Ollama"]
-    H --> I["IV · Repair<br/>AST critical-section synthesis"]
-    I --> J["Compile to in-memory bytecode"]
-    J --> K{"25 adversarial cycles"}
-    K -->|"Invariant holds"| L["Verified repair candidate"]
-    K -->|"Invariant breaks"| G
+sequenceDiagram
+    autonumber
+    participant A as Coroutine A
+    participant S as Shared counter
+    participant B as Coroutine B
+    A->>S: read 0
+    Note over A,B: A yields at await; no OS thread is needed
+    B->>S: read 0
+    B-->>B: await completes
+    B->>S: write 1
+    A-->>A: await completes
+    A->>S: write 1
+    Note over A,S: Two increments completed; stored value is still 1
 ```
 
-### The observation window
+### 1. Trace reduction
 
-ChaosSloth captures coroutine yield timings, event-loop latency deltas, and context switches over **25 natural cycles**. The loop leaves its own footprints: pauses, handoffs, and the small delays in which one task can enter another task’s unfinished sentence. That record is the baseline from which the candidate schedule is inferred.
-
-### Pillar I — Safety: Lamport’s happens-before relation
-
-For conflicting events $e_1$ and $e_2$ on the same memory location, a race exists when neither event causally precedes the other and at least one is a write. Let $W(e)$ mean “event $e$ writes this location”:
+ChaosSloth represents observable operations as an event alphabet `Σ`. Let `Res(a)` be the resources accessed by event `a`, and let `Write(a)` mean that `a` mutates a resource. Define the dependency relation:
 
 $$
-\neg(e_1 \prec e_2)
-\land \neg(e_2 \prec e_1)
-\land \bigl(W(e_1) \lor W(e_2)\bigr)
-\implies \text{data race}
+D = \{(a,b) \mid \operatorname{Res}(a) \cap \operatorname{Res}(b) \neq \varnothing \land (\operatorname{Write}(a) \lor \operatorname{Write}(b))\}
 $$
 
-Lamport vector clocks encode the partial order of events across tasks. There is no universal “now” shared by concurrent operations—only events and the causal relation $e_1 \prec e_2$. A wall clock may place two events on a timeline; it cannot manufacture a causal edge between them. When conflicting events are incomparable, the order witnessed in one run makes no promise about the next. ChaosSloth uses that distinction to separate harmless concurrency from a race capable of breaking an invariant.
-
-### Pillar II — State-space inversion: TabPFN-3.5
-
-Prior Labs TabPFN-3.5 runs locally as an active analysis agent over tabular scheduling telemetry. It evaluates the observed state in context and isolates the critical non-linear delay coordinate where an invariant collapses: **240.1 µs**, at **69.64% posterior confidence**.
-
-The inference is Bayesian in the literal sense: evidence revises the relative plausibility of candidate timing regions. For hypothesis $H$ and observed telemetry $D$, the governing relation is
-
 $$
-P(H\mid D)=\frac{P(D\mid H)P(H)}{P(D)}.
+I = (\Sigma \times \Sigma) \setminus D
 $$
 
-Here, $H$ is a candidate temporal boundary and $D$ is the measured scheduling record. The model turns a high-dimensional timing landscape into a coordinate that can be tested. That coordinate becomes a concrete schedule for deterministic interleaving. A fleeting accident acquires a timestamp and a replay path; chance is no longer asked to testify—the schedule is called back to the stand.
-
-### Pillar III — Liveness: the Coffman lock DAG
-
-ChaosSloth dynamically audits `asyncio.Lock` acquisition dependencies as a directed graph. Vertices represent the participants in the wait; edges record who is waiting on whom. A directed cycle closes the trap: every participant holds a resource needed by the next, and no one can move first. For the observed lock graph $G=(V,E)$, liveness requires acyclicity:
+`I` is the independence relation: event pairs that touch disjoint resources, or are read-only with respect to their shared resources. Two traces are equivalent when one can be obtained from the other by swapping adjacent independent events:
 
 $$
-G \text{ is a DAG} \iff
-\text{there is no sequence } v_0,\ldots,v_k \text{ with } k \ge 1,
-(v_i,v_{i+1}) \in E \text{ for every } 0 \le i < k,
-\text{ and } v_k=v_0.
+\sigma_1 \equiv_I \sigma_2
 $$
 
-The Coffman condition gives liveness a graph-theoretic test: a strictly acyclic lock-acquisition graph contains no circular wait in the observed dependency relation. ChaosSloth also searches for synchronous blocking primitives that can pin the event loop in place. A program can preserve every value and still fail by never reaching its next instruction. Safety without progress is a system that has stopped.
+The explored state space is organized into quotient classes:
 
-### Pillar IV — Amdahl-optimal critical-section slicing
+$$
+\Sigma^{*} / {\equiv_I}
+$$
 
-A local Google Gemma model diagnoses the critical section; Python’s `ast.NodeTransformer` then synthesizes an atomic lock around the complete read-modify-write cycle. The boundary matters. Protect only the write and the stale read has already escaped; protect the entire coroutine and unrelated work queues behind a needless gate. For a shared session store, the generated patch protects the `get`, `append`, and `set` sequence:
+rather than redundantly enumerating every permutation. In a worst-case workload with `N` mutually reorderable events, naïve permutation enumeration has factorial growth (`N!`); trace equivalence removes permutations that cannot change the result.
 
-```python
-async with self._lock:
-    current = self.sessions.get(user_id, [])
-    current.append(token)
-    self.sessions[user_id] = current
-```
+Lamport vector clocks provide the causal relation:
 
+$$
+e_1 \prec e_2 \quad\Longleftrightarrow\quad V(e_1) \leq V(e_2) \text{ componentwise and } V(e_1) \neq V(e_2)
+$$
+
+The reducer preserves causal order while identifying conflicting event pairs. This narrows the search to the schedule variations that can expose a collision.
+
+### 2. Bayesian temporal inference
+
+The pipeline feeds scheduling telemetry to a tabular Bayesian parameter-inversion stage. For observation `Δt*` and data `D`, the predictive probability is:
+
+$$
+p(y^{*}=1 \mid \Delta t^{*}, D) = \int p(y^{*}=1 \mid \Delta t^{*}, \theta)\,p(\theta \mid D)\,d\theta
+$$
+
+For the reported benchmark, the inferred critical timing coordinate was **218.5 µs**, with **88.35% posterior confidence**. ChaosSloth uses the inferred region to construct a deterministic schedule replay; the reported replay reproduced the failure **10 out of 10 times**. These are measured run results, not universal constants of the model or of Python.
+
+### 3. Local semantic diagnosis
+
+The diagnosis stage runs Google Gemma 2B locally through Ollama on an Apple M4, using Metal acceleration. The reported throughput is **52.9 tokens/second** on the benchmark machine. Its job is deliberately constrained to semantic hazard diagnosis: classify the bounded evidence and identify the relevant resource relationships. It does **not** generate unconstrained raw source code. The AST transformer makes the edit from structured hazard information, keeping code generation deterministic and reviewable.
+
+### 4. Dijkstra-ordered disjoint hazard enclosure
+
+The compiler uses Python’s `ast.NodeTransformer` to discover and protect state accesses. Discovery includes attribute reads, subscript stores, and mutating methods such as `.append()` and `.update()`.
+
+If a critical interval touches multiple resources, each generated lock receives a stable rank. Locks are acquired in strict total order:
+
+$$
+\operatorname{rank}(\ell_A) < \operatorname{rank}(\ell_B) \quad\Longleftrightarrow\quad A \prec_{\mathrm{lex}} B
+$$
+
+This is the standard lock-ordering argument (often associated with Havender’s deadlock-prevention conditions): if every acquisition follows one strict global order, a wait-for cycle would require ranks to increase around a cycle and return to the starting rank, which is impossible. The guarantee depends on all relevant acquisitions following the same order; unrelated locks or external code that violates the order are outside that argument.
+
+The allowed acquisition edges form a directed acyclic graph:
 
 ```mermaid
 flowchart LR
-    A["Natural delay / await"] --> B["Acquire asyncio.Lock"]
-    B --> C["Read shared state"]
-    C --> D["Modify state"]
-    D --> E["Write shared state"]
-    E --> F["Release lock"]
-    F --> G["Other work proceeds"]
-    style B fill:#d9f2e6,stroke:#247a52,stroke-width:2px
-    style C fill:#fff2cc,stroke:#a67c00
-    style D fill:#fff2cc,stroke:#a67c00
-    style E fill:#fff2cc,stroke:#a67c00
+    L1["rank 1 · counters"] --> L2["rank 2 · sessions"]
+    L2 --> L3["rank 3 · ledger"]
+    L1 --> L3
+    classDef lock fill:#17152b,color:#f7f2ff,stroke:#a78bfa,stroke-width:2px
+    class L1,L2,L3 lock
 ```
 
-The shaded middle is the invariant’s boundary. The delay stays outside; the state transition stays indivisible. A lock is a gate, and every instruction placed behind it pays a serialization cost.
-
-Non-blocking delays and yields remain outside the lock. Locking the entire coroutine would needlessly serialize unrelated work. Amdahl’s Law makes the cost plain: if $P$ is the parallelizable fraction of a workload and $N$ is the number of workers, the speedup is bounded by
+For a read `s_r`, write `s_w`, and an intervening yield, the patch encloses the smallest statement interval that protects the read-modify-write invariant:
 
 $$
-S(N)=\frac{1}{(1-P)+\frac{P}{N}}
+[s_r, s_w]
 $$
 
-The art is not to lock everything. It is to draw the boundary exactly where the invariant demands it: broad enough to make the state transition indivisible, narrow enough to leave unrelated work in motion.
+This aims to minimize serialized work in the spirit of Amdahl’s law: asynchronous work outside that interval remains eligible to interleave. “Minimal” here means minimal with respect to the identified access interval and program structure, not a claim that globally optimal synchronization is computable for arbitrary Python programs.
 
-### Sandboxed verification
+Generated guards initialize locks lazily:
 
-The modified AST is compiled into in-memory bytecode and run through 25 adversarial cycles. The measured race rate falls from **68.0% to 0.0% in 9.07 seconds**. The candidate schedule reproduces the race **10/10 times** before repair. The patched execution satisfies the checked happens-before invariants and the lock acquisition DAG remains acyclic.
-
-## 4. Why Cloud AI Fails Here
-
-A cloud LLM may be brilliant; it is still at the wrong end of a wire. ChaosSloth is locating a **240.1 µs** scheduling coordinate. The network round trip belongs to another temporal scale; the request path adds its own variance to the investigation. A distant service cannot be the silent witness to a microsecond crime. The timing boundary is in the process, the model call is elsewhere, and the experiment has already changed before the answer returns.
-
-Then there is memory: the program’s memory, and the memory bus carrying its state. Source code and execution traces can hold credentials, customer records, and the map of a proprietary system. ChaosSloth keeps inference local and air-gapped; program context stays beside the process that produced it. No upload. No external inference dependency. No per-query meter running with every replay. Once installed, local inference has zero marginal cost.
-
-Google Gemma 2B/9B runs through Ollama. On the **Apple M4**, Gemma 2B uses Metal at **52.91 tokens/sec**. It reads the dynamic AST context and diagnoses the unsynchronized read-modify-write collision; the compiler transformation turns that diagnosis into an atomic candidate, and the sandbox decides whether the candidate survives contact with adversarial schedules.
-
-## 5. The Benchmark Run
-
-```text
-╭────────────────── CHAOSSLOTH :: ASYNC CONCURRENCY EXORCIST ──────────────────╮
-│                                                                              │
-│    ⚡ Leslie Lamport Vector Clocks (Safety Invariant: ¬(e1 ≺ e2))            │
-│    ⚡ Prior Labs TabPFN-3.5 (In-Context Bayesian State-Space Inversion)      │
-│    ⚡ Google Gemma 2B/9B (AST Synchronization & Atomic Lock Synthesis)       │
-│    ⚡ Coffman Lock Acquisition DAG (Liveness & Deadlock Prevention)          │
-│                                                                              │
-╰─ Autonomous Bayesian Interleaver • Formal Verification • Air-Gapped Local AI─╯
-▶ [1/8] SAMPLING BASELINE ASYNCHRONOUS TELEMETRY ... running
-▶ [2/8] INVERTING TEMPORAL BOUNDARY VIA PRIOR LABS TABPFN-3.5 ... running
-                     Prior Labs TabPFN-3.5 Telemetry Matrix                     
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Parameter / State         ┃ Observed Measurement ┃ Engine Interpretation     ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ Baseline Sampling Cycles  │ 25 Iterations        │ Empirical async sampling  │
-│ Observed Flakiness Ratio  │ 68.0%                │ Intermittent failure rate │
-│ Critical Failure Coord    │ 240.1 µs delay       │ TabPFN inverted boundary  │
-│ Bayesian Confidence Score │ 69.64%               │ Posterior certainty       │
-│ Targeted Reproducibility  │ 100.0% (10/10)       │ Deterministic reproduction│
-└───────────────────────────┴──────────────────────┴───────────────────────────┘
-▶ [3/8] ENFORCING DETERMINISTIC COLLISION INTERLEAVING ... running
-▶ [4/8] AUDITING ACTIVE LOCK ACQUISITION DAG (COFFMAN CHECK) ... running
-  ✔ Liveness Verified: Directed lock graph is strictly acyclic. No deadlocks possible.
-▶ [5/8] AUDITING EVENT-LOOP STARVATION & BLOCKING PRIMITIVES ... running
-  ✔ Responsiveness Verified: Zero synchronous blocking primitives detected.
-▶ [6/8] QUERYING LOCAL GOOGLE GEMMA VIA OLLAMA (DYNAMIC AST CONTEXT) ... running
-  Gemma Local Diagnosis: Unsynchronized Read-Modify-Write state collision across await boundaries.
-▶ [7/8] SYNTHESIZING AST & IN-MEMORY BYTECODE COMPILATION ... running
-╭─────────────────────── Deterministic AST Atomic Patch ───────────────────────╮
-│    1 --- a/SharedSessionStore.py                                             │
-│    2 +++ b/SharedSessionStore.py                                             │
-│    3 @@ -1,13 +1,15 @@                                                       │
-│    4  class SharedSessionStore:                                              │
-│    5 +                                                                       │
-│    6      def __init__(self):                                                │
-│    7          self.sessions: Dict[str, List[str]] = {}                       │
-│    8 +        self._lock = asyncio.Lock()                                    │
-│    9                                                                         │
-│   10      async def update_session(self, user_id: str, token: str):          │
-│   11          if random.random() < 0.45:                                     │
-│   12              await asyncio.sleep(random.uniform(0.0002, 0.0008))        │
-│   13          else:                                                          │
-│   14              await asyncio.sleep(1e-05)                                 │
-│   15 +        async with self._lock:                                         │
-│   16 +            current = self.sessions.get(user_id, [])                   │
-│   17 +            current.append(token)                                      │
-│   18 +            self.sessions[user_id] = current                           │
-╰──────────────────────────────────────────────────────────────────────────────╯
-▶ [8/8] SANDBOXED VERIFICATION ACROSS 25 ADVERSARIAL CYCLES ... running
-╭──────────────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│  ✔ VERIFICATION COMPLETE IN 9.07s                                            │
-│    • Pre-Patch Race Rate : 68.0%                                             │
-│    • Post-Patch Race Rate: 0.0%                                              │
-│                                                                              │
-│  All Lamport Happened-Before invariants satisfied. Coffman lock DAG acyclic. │
-│  Sloth mode fulfilled. Safe to merge.                                        │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
+```python
+if not hasattr(self, "_lock_counters"):
+    self._lock_counters = asyncio.Lock()
 ```
 
-## 6. Installation & Quickstart
+The transformer’s output remains ordinary Python and can be reviewed as a diff.
 
-Clone the repository and install ChaosSloth in editable mode:
+### Representative multi-resource AST diff
+
+This illustrates the expected shape of a two-resource patch; it is a schematic example, not a source diff from a repository checkout.
+
+```diff
+ async def settle(self, session_id, delta):
+-    balance = self.counters[session_id]
+-    await self.sessions[session_id].validate()
+-    self.counters[session_id] = balance + delta
+-    self.sessions[session_id].events.append(("settled", delta))
++    if not hasattr(self, "_lock_counters"):
++        self._lock_counters = asyncio.Lock()
++    if not hasattr(self, "_lock_sessions"):
++        self._lock_sessions = asyncio.Lock()
++    async with self._lock_counters, self._lock_sessions:
++        balance = self.counters[session_id]
++        await self.sessions[session_id].validate()
++        self.counters[session_id] = balance + delta
++        self.sessions[session_id].events.append(("settled", delta))
+```
+
+The emitted acquisition order must be stable and consistent at every call site. The example shows the requested multi-variable shape; actual indentation and lock placement depend on the analyzed method and its control flow.
+
+## Quickstart and CLI
 
 ```bash
 git clone https://github.com/smtherer/ChaosSloth.git
 cd ChaosSloth
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+pip install -e .
+chaossloth path/to/your_async_program.py
 ```
 
-Run the autonomous analyzer:
+The CLI entry point and exact options should be confirmed against the checked-out package metadata. The command above shows the project’s intended quickstart invocation.
 
-```bash
-chaossloth
-```
+## Hacktoberfest 2026 prize categories
 
-Analyze a specific class and method:
+The categories below map the project’s stated award tracks to their technical focus. A category listing does not by itself establish an official event affiliation, sponsor commitment, or prize guarantee.
 
-```bash
-chaossloth path/to/file.py --cls SharedSessionStore --method update_session
-```
+| Category | Project contribution / judging focus |
+|---|---|
+| **Slow & Steady — Top Prize** | End-to-end deterministic concurrency verification and the live benchmark |
+| **Prior Labs — TabPFN** | Bayesian inversion of event-loop scheduling telemetry |
+| **Google — Gemma** | Local, bounded semantic hazard diagnosis with Gemma 2B |
+| **Render** | Deployable live benchmark dashboard and result presentation |
+| **Sentry** | Clear failure evidence, deterministic reproduction, and actionable diagnostics |
 
-Run the pytest integration:
+## Links
 
-```bash
-pytest --chaossloth
-```
+- **Live dashboard:** [chaossloth-dashboard.onrender.com](https://chaossloth-dashboard.onrender.com)
+- **GitHub:** [github.com/smtherer/ChaosSloth](https://github.com/smtherer/ChaosSloth)
 
-For local AST diagnosis, install Ollama and make the supported Gemma model available. TabPFN-3.5 and Gemma inference run locally; configure Render and Sentry separately for the web dashboard and agent tracing.
+## The point
 
-## 7. Hacktoberfest 2026 Partner Prize Submissions
-
-ChaosSloth is built for the **Slow and Steady** challenge and enters the partner tracks with one claim: concurrency deserves evidence at the scale where it breaks. Each integration has a distinct job in that argument.
-
-| Prize Category | Value | Case for the Track |
-|---|---:|---|
-| 🏆 Slow & Steady — Top Prize | $250 | I enter this track because ChaosSloth replaces frantic reruns and manual fuzzing with patient Bayesian analysis, deterministic replay, and sandbox verification. The engineer can leave the dashboard; the evidence keeps working. |
-| 🌟 Prior Labs — Best Use of TabPFN | $200 | My Prior Labs entry puts TabPFN-3.5 inside the runtime investigation: it reads system-level scheduling telemetry and identifies the 240.1 µs temporal boundary associated with invariant failure. |
-| 🌟 Google Gemma — Best Use of Gemma | $200 | For Gemma, I run the 2B model locally through Ollama on Apple M4 Metal at 52.91 tokens/sec. It diagnoses AST critical sections while source and trace context remain air-gapped. |
-| 🌟 Render — Best Use of Render | $200 | Render carries the live telemetry explorer and agent dashboard; `render.yaml` makes the deployment part of the project rather than a hand-maintained afterthought. |
-| 🛡️ Sentry — Best Agent Tracing | $100 | I bring Sentry into the agent’s chain of reasoning: traces cover TabPFN inversion spans, Gemma reasoning latency, and sandbox verification cycles, exposing the cost of each step in the diagnosis. |
-| 🌐 .tech Domains | $100 | The .tech entry has a public endpoint: the production dashboard is live at [chaossloth.tech](https://chaossloth.tech), where the project’s telemetry story leaves the terminal and meets its users. |
-
-## 8. Deployment & License
-
-The live telemetry explorer and agent dashboard run on Render, described in `render.yaml`; the production dashboard is live at [chaossloth.tech](https://chaossloth.tech). Sentry follows the work across TabPFN inversion spans, Gemma reasoning latency, and sandbox verification cycles. The observer, too, is observed: each stage leaves a trace of its own cost.
-
-ChaosSloth is licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). See `LICENSE` for the full license text.
+An optimistic CI rerun tells you that one schedule got lucky. A replayable counterexample tells you which events collided, and a verified patch tells you the collision stopped happening under the schedules you tried. Formal evidence beats clicking **Re-run failed jobs** and hoping the computer has learned manners.
